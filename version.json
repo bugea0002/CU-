@@ -1,6 +1,6 @@
 {
-  "versionCode": 5,
-  "versionName": "1.2.2",
-  "apkUrl": "https://github.com/bugea0002/CU-/releases/download/v1.2.2-test3/1.2.2.apk",
-  "releaseNotes": "개선\n- 캐시 자동 정리: 앱 시작 시 24시간 이상 된 임시 파일 자동 삭제\n- 업데이트 APK 설치 후 자동 삭제\n- 공유 이미지 형식 PNG → JPEG 변환으로 임시 파일 크기 감소\n- APK 빌드 시 파일명 버전 번호로 자동 지정\n\n추가\n- 설정 > 저장소: 캐시 용량 표시 및 수동 정리 버튼\n- 설정 > 저장소: 앱 갤러리 전체 용량 표시"
+  "versionCode": 6,
+  "versionName": "1.2.3",
+  "apkUrl": "https://github.com/bugea0002/CU-/releases/download/v1.2.3/1.2.3.apk",
+  "releaseNotes": "긴급 점검"
 }

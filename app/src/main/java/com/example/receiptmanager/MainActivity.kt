@@ -242,7 +242,7 @@ fun ReceiptApp() {
     fun contactDeveloper() {
         val intent = Intent(Intent.ACTION_SENDTO).apply {
             data = Uri.parse("mailto:")
-            putExtra(Intent.EXTRA_EMAIL, arrayOf("swpark030307@naver.com")) 
+            putExtra(Intent.EXTRA_EMAIL, arrayOf("")) 
             putExtra(Intent.EXTRA_SUBJECT, "[금고보관 앱 문의]")
         }
         try {
@@ -767,7 +767,7 @@ fun SettingsDialog(
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Text("앱 버전")
-                    Text("1.2.2", color = Color.Gray)
+                    Text("1.2.3", color = Color.Gray)
                 }
 
                 Row(
