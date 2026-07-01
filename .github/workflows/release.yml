@@ -33,7 +33,9 @@ jobs:
           echo "VCODE=$VCODE" >> "$GITHUB_OUTPUT"
 
       - name: Build release APK
-        run: ./gradlew assembleRelease
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease
         env:
           KEYSTORE_PATH: ${{ github.workspace }}/keystore.jks
           KEY_STORE_PASSWORD: ${{ secrets.KEY_STORE_PASSWORD }}
