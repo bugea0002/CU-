@@ -1,6 +1,6 @@
 {
-  "versionCode": 6,
-  "versionName": "1.2.3",
-  "apkUrl": "https://github.com/bugea0002/CU-/releases/download/v1.2.3-fix/1.2.3.apk",
-  "releaseNotes": "긴급 점검"
+  "versionCode": 7,
+  "versionName": "1.2.4",
+  "apkUrl": "https://github.com/bugea0002/CU-/releases/download/v1.2.4/1.2.4.apk",
+  "releaseNotes": "한국어·영어 언어팩 자동 설치 수정\n기본 언어 설치 시 WiFi 불필요하도록 개선"
 }
