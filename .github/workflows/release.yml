@@ -27,10 +27,10 @@ jobs:
       - name: Get version name
         id: version
         run: |
-          VERSION=$(grep 'versionName' app/build.gradle.kts | grep -oP '(?<=")[^"]+(?=")')
-          VCODE=$(grep 'versionCode' app/build.gradle.kts | grep -oP '\d+')
-          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
-          echo "VCODE=$VCODE" >> $GITHUB_OUTPUT
+          VERSION=$(grep 'versionName = "' app/build.gradle.kts | grep -oP '(?<=")[^"]+(?=")')
+          VCODE=$(grep 'versionCode = ' app/build.gradle.kts | grep -oP '\d+')
+          echo "VERSION=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "VCODE=$VCODE" >> "$GITHUB_OUTPUT"
 
       - name: Build release APK
         run: ./gradlew assembleRelease
