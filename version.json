@@ -1,7 +1,7 @@
 {
-  "versionCode": 9,
-  "versionName": "1.2.6",
-  "apkUrl": "https://github.com/bugea0002/CU-/releases/download/v1.2.6/1.2.6.apk",
-  "sha256": "d368ec9c6a9e5b583916454bef3b6b56961f095f50c1735f04452c19f012e77a",
-  "releaseNotes": "업데이트 파일 무결성(SHA-256) 검증 추가, 캐시 자동 정리가 업데이트 파일을 건드리지 않도록 수정"
+  "versionCode": 10,
+  "versionName": "1.2.7",
+  "apkUrl": "https://github.com/bugea0002/CU-/releases/download/v1.2.7/1.2.7.apk",
+  "sha256": "",
+  "releaseNotes": "금고보관/폐기/파손 모드 추가 (화면 상단 제목 탭으로 전환). 폐기는 갤러리에서 여러 장 선택해 목록 자동 생성, 파손은 촬영 1건으로 보고 문구 생성"
 }

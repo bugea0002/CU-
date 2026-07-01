@@ -25,6 +25,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
@@ -39,6 +40,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -100,8 +102,11 @@ import java.security.MessageDigest
 import java.util.Calendar
 import java.util.concurrent.Executors
 import kotlin.math.roundToInt
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import java.net.HttpURLConnection
 import java.net.URL
@@ -131,6 +136,18 @@ data class UpdateInfo(
     val releaseNotes: String,
     val sha256: String
 )
+
+enum class ScanMode(val label: String) {
+    SAFE("금고보관"), DISPOSAL("폐기"), DAMAGE("파손");
+
+    fun next(): ScanMode = when (this) {
+        SAFE -> DISPOSAL
+        DISPOSAL -> DAMAGE
+        DAMAGE -> SAFE
+    }
+}
+
+data class DisposalItem(val name: String, val quantity: Int)
 
 class MainActivity : ComponentActivity() {
     private val requestPermissionLauncher = registerForActivityResult(
@@ -188,7 +205,10 @@ fun ReceiptApp() {
     
     var showCamera by remember { mutableStateOf(autoCameraLaunch) }
     var currentBitmap by remember { mutableStateOf<Bitmap?>(null) }
-    
+
+    var scanMode by remember { mutableStateOf(ScanMode.SAFE) }
+    var disposalBitmaps by remember { mutableStateOf<List<Bitmap>>(emptyList()) }
+
     var showAlarmDialog by remember { mutableStateOf(false) }
     var showSettingsDialog by remember { mutableStateOf(false) }
     var showTranslatorDialog by remember { mutableStateOf(false) }
@@ -228,6 +248,40 @@ fun ReceiptApp() {
                 capturedText = result
             }
         }
+    }
+
+    // 파손 보고: 사진 한 장에서 상품명·수량 1건을 인식해 "OO 3개 파손입니다" 형식으로 반환
+    fun processDamageBitmap(bitmap: Bitmap?) {
+        bitmap?.let {
+            coroutineScope.launch {
+                capturedText = try {
+                    val text = recognizeTextFromBitmap(it)
+                    val item = parseDisposalLabel(text).firstOrNull()
+                    item?.let { found -> formatDamageReport(found) } ?: "인식 실패: 라벨을 다시 촬영해주세요"
+                } catch (e: Exception) {
+                    "인식 실패: ${e.message}"
+                }
+            }
+        }
+    }
+
+    // 폐기 목록: 갤러리에서 선택한 사진 여러 장을 각각 인식해 하나의 목록으로 합침
+    fun processDisposalBitmaps(bitmaps: List<Bitmap>) {
+        coroutineScope.launch {
+            val items = mutableListOf<DisposalItem>()
+            for (bmp in bitmaps) {
+                try {
+                    items.addAll(parseDisposalLabel(recognizeTextFromBitmap(bmp)))
+                } catch (e: Exception) { }
+            }
+            capturedText = formatDisposalList(items)
+        }
+    }
+
+    fun resetScanState() {
+        capturedText = ""
+        currentBitmap = null
+        disposalBitmaps = emptyList()
     }
 
     // Alarm Logic Helper
@@ -311,6 +365,19 @@ fun ReceiptApp() {
         }
     }
 
+    // 폐기 목록용 - 갤러리에서 여러 장 선택
+    val disposalGalleryLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickMultipleVisualMedia()
+    ) { uris: List<Uri> ->
+        if (uris.isNotEmpty()) {
+            val bitmaps = uris.mapNotNull { uri ->
+                try { loadBitmapFromUri(context, uri) } catch (e: Exception) { null }
+            }
+            disposalBitmaps = bitmaps
+            processDisposalBitmaps(bitmaps)
+        }
+    }
+
     Surface(
         modifier = Modifier.fillMaxSize(),
         color = MaterialTheme.colorScheme.background
@@ -336,7 +403,11 @@ fun ReceiptApp() {
                     onImageCaptured = { bitmap ->
                         showCamera = false
                         currentBitmap = bitmap
-                        processCurrentBitmap(bitmap)
+                        when (scanMode) {
+                            ScanMode.SAFE -> processCurrentBitmap(bitmap)
+                            ScanMode.DAMAGE -> processDamageBitmap(bitmap)
+                            ScanMode.DISPOSAL -> processCurrentBitmap(bitmap)
+                        }
                         saveToAppGallery(context, bitmap)
                     },
                     onError = { exc ->
@@ -414,6 +485,12 @@ fun ReceiptApp() {
                 ResultView(
                     initialText = capturedText,
                     currentBitmap = currentBitmap,
+                    scanMode = scanMode,
+                    disposalBitmaps = disposalBitmaps,
+                    onModeToggle = {
+                        scanMode = scanMode.next()
+                        resetScanState()
+                    },
                     isAlarmEnabled = isAlarmEnabled,
                     memoContent = memoContent,
                     showMemo = showMemo,
@@ -449,7 +526,14 @@ fun ReceiptApp() {
                         tutorialStep = 0
                         sharedPrefs.edit().putBoolean("tutorial_finished", false).apply()
                     },
-                    onImageClick = { showCamera = true },
+                    onImageClick = {
+                        when (scanMode) {
+                            ScanMode.SAFE, ScanMode.DAMAGE -> showCamera = true
+                            ScanMode.DISPOSAL -> disposalGalleryLauncher.launch(
+                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                            )
+                        }
+                    },
                     onReportBounds = { key, rect ->
                         when(key) {
                             "imageBox" -> imageBoxBounds = rect
@@ -770,7 +854,7 @@ fun SettingsDialog(
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Text("앱 버전")
-                    Text("1.2.6", color = Color.Gray)
+                    Text("1.2.7", color = Color.Gray)
                 }
 
                 Row(
@@ -1276,6 +1360,9 @@ fun AlarmConfigDialog(
 fun ResultView(
     initialText: String,
     currentBitmap: Bitmap?,
+    scanMode: ScanMode,
+    disposalBitmaps: List<Bitmap>,
+    onModeToggle: () -> Unit,
     isAlarmEnabled: Boolean,
     memoContent: String,
     showMemo: Boolean,
@@ -1303,9 +1390,10 @@ fun ResultView(
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text(
-            text = "금고보관",
+            text = scanMode.label,
             style = MaterialTheme.typography.headlineMedium,
-            fontWeight = FontWeight.Bold
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.clickable { onModeToggle() }
         )
 
         Spacer(modifier = Modifier.height(16.dp))
@@ -1413,7 +1501,23 @@ fun ResultView(
                 .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(12.dp)),
             contentAlignment = Alignment.Center
         ) {
-            if (currentBitmap != null) {
+            if (scanMode == ScanMode.DISPOSAL && disposalBitmaps.isNotEmpty()) {
+                LazyRow(
+                    modifier = Modifier.fillMaxSize().padding(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(disposalBitmaps) { bmp ->
+                        Image(
+                            bitmap = bmp.asImageBitmap(),
+                            contentDescription = "폐기 사진",
+                            modifier = Modifier
+                                .fillMaxHeight()
+                                .clip(RoundedCornerShape(8.dp)),
+                            contentScale = ContentScale.Fit
+                        )
+                    }
+                }
+            } else if (currentBitmap != null) {
                 Image(
                     bitmap = currentBitmap.asImageBitmap(),
                     contentDescription = "Receipt Image",
@@ -1429,7 +1533,10 @@ fun ResultView(
                         modifier = Modifier.size(48.dp)
                     )
                     Spacer(modifier = Modifier.height(8.dp))
-                    Text("터치하여 사진 등록", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        if (scanMode == ScanMode.DISPOSAL) "터치하여 폐기 사진 선택 (여러 장 가능)" else "터치하여 사진 등록",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
         }
@@ -1458,11 +1565,12 @@ fun ResultView(
                 clipboard.setPrimaryClip(clip)
                 Toast.makeText(context, "결과가 복사되었습니다.", Toast.LENGTH_SHORT).show()
 
-
-                if (currentBitmap != null) {
-                    shareImageOnly(context, currentBitmap)
-                } else {
-                    Toast.makeText(context, "공유할 이미지가 없습니다.", Toast.LENGTH_SHORT).show()
+                if (scanMode != ScanMode.DISPOSAL) {
+                    if (currentBitmap != null) {
+                        shareImageOnly(context, currentBitmap)
+                    } else {
+                        Toast.makeText(context, "공유할 이미지가 없습니다.", Toast.LENGTH_SHORT).show()
+                    }
                 }
             },
             modifier = Modifier
@@ -1735,6 +1843,47 @@ fun saveBitmapToGallery(context: Context, bitmap: Bitmap) {
         Log.e("saveBitmapToGallery", "폰 갤러리 저장 실패", e)
     }
 }
+
+// 비트맵에서 텍스트 인식 결과(Text)를 suspend 함수로 반환
+suspend fun recognizeTextFromBitmap(bitmap: Bitmap): com.google.mlkit.vision.text.Text =
+    suspendCancellableCoroutine { cont ->
+        val image = InputImage.fromBitmap(bitmap, 0)
+        val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+        recognizer.process(image)
+            .addOnSuccessListener { cont.resume(it) }
+            .addOnFailureListener { e -> cont.resumeWithException(e) }
+    }
+
+// CU 폐기 라벨은 "Again" 문구가 고정으로 찍히므로, 이를 기준으로 바로 다음 줄(상품명×수량)만 읽어
+// 배경에 같이 찍힌 제품 포장지의 유통기한·영양정보 등은 무시한다.
+fun parseDisposalLabel(visionText: com.google.mlkit.vision.text.Text): List<DisposalItem> {
+    val lines = visionText.textBlocks.flatMap { it.lines }.map { it.text.trim() }
+    val quantityRegex = Regex("[×xX]\\s*(\\d+)\\s*$")
+    val items = mutableListOf<DisposalItem>()
+    for (i in lines.indices) {
+        if (lines[i].contains("again", ignoreCase = true)) {
+            val nextLine = lines.getOrNull(i + 1) ?: continue
+            val match = quantityRegex.find(nextLine) ?: continue
+            val quantity = match.groupValues[1].toIntOrNull() ?: continue
+            val name = nextLine.substring(0, match.range.first).trim()
+            if (name.isNotEmpty()) items.add(DisposalItem(name, quantity))
+        }
+    }
+    return items
+}
+
+// 폐기: 오늘 날짜 + 상품명·수량 목록
+fun formatDisposalList(items: List<DisposalItem>): String {
+    val calendar = Calendar.getInstance()
+    val month = calendar.get(Calendar.MONTH) + 1
+    val day = calendar.get(Calendar.DAY_OF_MONTH)
+    val sb = StringBuilder("${month}월${day}일(금일) 폐기 목록입니다")
+    items.forEach { sb.append("\n${it.name} ${it.quantity}개") }
+    return sb.toString()
+}
+
+// 파손: 단건 보고 문구
+fun formatDamageReport(item: DisposalItem): String = "${item.name} ${item.quantity}개 파손입니다"
 
 // ML Kit로 비트맵에서 텍스트 인식 후 파싱 함수에 전달
 fun processImage(bitmap: Bitmap, isPos1Checked: Boolean, isPos2Checked: Boolean, useTenThousandUnit: Boolean, onResult: (String) -> Unit) {
