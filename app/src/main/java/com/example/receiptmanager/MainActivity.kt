@@ -768,7 +768,7 @@ fun SettingsDialog(
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Text("앱 버전")
-                    Text("1.2.4", color = Color.Gray)
+                    Text("1.2.5", color = Color.Gray)
                 }
 
                 Row(
@@ -2053,7 +2053,6 @@ suspend fun downloadAndInstallApk(context: Context, apkUrl: String) {
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
             )
-            apkFile.delete()
         }
     }
 }
