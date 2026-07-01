@@ -216,6 +216,7 @@ fun ReceiptApp() {
                 dir.listFiles()?.forEach { if (it.lastModified() < yesterday) it.delete() }
             }
         }
+        autoDownloadMandatoryModels(context)
     }
 
     // Helper to process image
@@ -577,8 +578,10 @@ fun SettingsDialog(
                 }
         } else if (!isDownloaded) {
             processingModels = processingModels.toMutableMap().apply { put(language, true) }
-            val conditions = DownloadConditions.Builder().requireWifi().build()
-            
+            // 기본 언어팩(한국어·영어)은 WiFi 없이도 다운로드, 선택 언어팩은 WiFi 필요
+            val conditions = if (isMandatory) DownloadConditions.Builder().build()
+                             else DownloadConditions.Builder().requireWifi().build()
+
             modelManager.download(model, conditions)
                 .addOnSuccessListener {
                     Toast.makeText(context, "$languageName 언어팩 다운로드 완료!", Toast.LENGTH_SHORT).show()
@@ -681,12 +684,10 @@ fun SettingsDialog(
                                 if (isDownloaded) {
                                     Text("설치됨", fontSize = 12.sp, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
                                 } else {
-                                    Button(
-                                        onClick = { manageModel(languageCode, name, false, true) },
-                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-                                        modifier = Modifier.height(32.dp)
-                                    ) {
-                                        Text("설치 필요", fontSize = 12.sp)
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text("자동 설치 중", fontSize = 12.sp, color = Color.Gray)
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
                                     }
                                 }
                             } else {
@@ -767,7 +768,7 @@ fun SettingsDialog(
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Text("앱 버전")
-                    Text("1.2.3", color = Color.Gray)
+                    Text("1.2.4", color = Color.Gray)
                 }
 
                 Row(
@@ -2148,6 +2149,21 @@ fun formatSize(bytes: Long): String = when {
     bytes < 1024 -> "${bytes}B"
     bytes < 1024 * 1024 -> "${bytes / 1024}KB"
     else -> "${"%.1f".format(bytes / (1024.0 * 1024.0))}MB"
+}
+
+// 앱 시작 시 한국어·영어 언어팩을 WiFi 무관하게 자동 설치
+fun autoDownloadMandatoryModels(context: Context) {
+    val modelManager = RemoteModelManager.getInstance()
+    listOf(TranslateLanguage.KOREAN, TranslateLanguage.ENGLISH).forEach { language ->
+        val model = TranslateRemoteModel.Builder(language).build()
+        modelManager.isModelDownloaded(model).addOnSuccessListener { downloaded ->
+            if (!downloaded) {
+                modelManager.download(model, DownloadConditions.Builder().build())
+                    .addOnSuccessListener { Log.d("MLKit", "$language 자동 설치 완료") }
+                    .addOnFailureListener { e -> Log.e("MLKit", "$language 자동 설치 실패", e) }
+            }
+        }
+    }
 }
 
 fun loadAppGalleryImages(context: Context): List<File> {
