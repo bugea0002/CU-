@@ -17,8 +17,8 @@ android {
         applicationId = "com.example.receiptmanager"
         minSdk = 24
         targetSdk = 36
-        versionCode = 11
-        versionName = "1.2.8"
+        versionCode = 12
+        versionName = "1.3.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -90,6 +90,5 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.ui:ui-tooling-preview")
     debugImplementation("androidx.compose.ui:ui-tooling")
-    implementation("com.google.mlkit:translate:17.0.2")
     implementation("androidx.compose.material:material-icons-extended")
 }

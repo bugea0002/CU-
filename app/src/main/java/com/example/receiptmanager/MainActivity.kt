@@ -14,10 +14,6 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
-import android.speech.RecognitionListener
-import android.speech.RecognizerIntent
-import android.speech.SpeechRecognizer
-import android.speech.tts.TextToSpeech
 import java.util.Locale
 import android.util.Log
 import android.widget.Toast
@@ -25,7 +21,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
-import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
@@ -40,7 +35,6 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -53,10 +47,6 @@ import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Translate
-import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.Send
-import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -86,16 +76,8 @@ import androidx.compose.ui.window.Dialog
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import com.example.receiptmanager.ui.theme.ReceiptManagerTheme
-import com.google.mlkit.common.model.DownloadConditions
-import com.google.mlkit.common.model.RemoteModelManager
-import com.google.mlkit.nl.translate.TranslateLanguage
-import com.google.mlkit.nl.translate.TranslateRemoteModel
-import com.google.mlkit.nl.translate.Translation
-import com.google.mlkit.nl.translate.Translator
-import com.google.mlkit.nl.translate.TranslatorOptions
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
-import com.google.mlkit.vision.text.korean.KoreanTextRecognizerOptions
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import java.io.File
 import java.io.FileOutputStream
@@ -103,11 +85,8 @@ import java.security.MessageDigest
 import java.util.Calendar
 import java.util.concurrent.Executors
 import kotlin.math.roundToInt
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import java.net.HttpURLConnection
 import java.net.URL
@@ -125,30 +104,12 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 
-data class ChatMessage(
-    val text: String,
-    val translatedText: String,
-    val isUser: Boolean
-)
-
 data class UpdateInfo(
     val versionName: String,
     val apkUrl: String,
     val releaseNotes: String,
     val sha256: String
 )
-
-enum class ScanMode(val label: String) {
-    SAFE("금고보관"), DISPOSAL("폐기"), DAMAGE("파손");
-
-    fun next(): ScanMode = when (this) {
-        SAFE -> DISPOSAL
-        DISPOSAL -> DAMAGE
-        DAMAGE -> SAFE
-    }
-}
-
-data class DisposalItem(val name: String, val quantity: Int)
 
 class MainActivity : ComponentActivity() {
     private val requestPermissionLauncher = registerForActivityResult(
@@ -172,10 +133,6 @@ class MainActivity : ComponentActivity() {
             }
         }
         
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-        }
-
         setContent {
             ReceiptManagerTheme {
                 ReceiptApp()
@@ -207,12 +164,8 @@ fun ReceiptApp() {
     var showCamera by remember { mutableStateOf(autoCameraLaunch) }
     var currentBitmap by remember { mutableStateOf<Bitmap?>(null) }
 
-    var scanMode by remember { mutableStateOf(ScanMode.SAFE) }
-    var disposalBitmaps by remember { mutableStateOf<List<Bitmap>>(emptyList()) }
-
     var showAlarmDialog by remember { mutableStateOf(false) }
     var showSettingsDialog by remember { mutableStateOf(false) }
-    var showTranslatorDialog by remember { mutableStateOf(false) }
     var showGalleryCamera by remember { mutableStateOf(false) }
 
     // Tutorial State
@@ -239,7 +192,6 @@ fun ReceiptApp() {
                 dir.listFiles()?.forEach { if (it.lastModified() < yesterday) it.delete() }
             }
         }
-        autoDownloadMandatoryModels(context)
     }
 
     // Helper to process image
@@ -249,40 +201,6 @@ fun ReceiptApp() {
                 capturedText = result
             }
         }
-    }
-
-    // 파손 보고: 사진 한 장에서 상품명·수량 1건을 인식해 "OO 3개 파손입니다" 형식으로 반환
-    fun processDamageBitmap(bitmap: Bitmap?) {
-        bitmap?.let {
-            coroutineScope.launch {
-                capturedText = try {
-                    val text = recognizeTextFromBitmap(it)
-                    val item = parseDisposalLabel(text).firstOrNull()
-                    item?.let { found -> formatDamageReport(found) } ?: "인식 실패: 라벨을 다시 촬영해주세요"
-                } catch (e: Exception) {
-                    "인식 실패: ${e.message}"
-                }
-            }
-        }
-    }
-
-    // 폐기 목록: 갤러리에서 선택한 사진 여러 장을 각각 인식해 하나의 목록으로 합침
-    fun processDisposalBitmaps(bitmaps: List<Bitmap>) {
-        coroutineScope.launch {
-            val items = mutableListOf<DisposalItem>()
-            for (bmp in bitmaps) {
-                try {
-                    items.addAll(parseDisposalLabel(recognizeTextFromBitmap(bmp)))
-                } catch (e: Exception) { }
-            }
-            capturedText = formatDisposalList(items)
-        }
-    }
-
-    fun resetScanState() {
-        capturedText = ""
-        currentBitmap = null
-        disposalBitmaps = emptyList()
     }
 
     // Alarm Logic Helper
@@ -314,7 +232,6 @@ fun ReceiptApp() {
     BackHandler(enabled = true) {
         if (showSettingsDialog) { showSettingsDialog = false }
         else if (showAlarmDialog) { showAlarmDialog = false }
-        else if (showTranslatorDialog) { showTranslatorDialog = false }
         else if (showGalleryCamera) { showGalleryCamera = false }
         else if (showCamera) {
              if (currentBitmap != null) { showCamera = false }
@@ -358,28 +275,11 @@ fun ReceiptApp() {
             try {
                 val bitmap = loadBitmapFromUri(context, uri)
                 currentBitmap = bitmap
-                when (scanMode) {
-                    ScanMode.SAFE -> processCurrentBitmap(bitmap)
-                    ScanMode.DAMAGE -> processDamageBitmap(bitmap)
-                    ScanMode.DISPOSAL -> processCurrentBitmap(bitmap)
-                }
+                processCurrentBitmap(bitmap)
                 showCamera = false
             } catch (e: Exception) {
                 Toast.makeText(context, "이미지 로드 실패: ${e.message}", Toast.LENGTH_SHORT).show()
             }
-        }
-    }
-
-    // 폐기 목록용 - 갤러리에서 여러 장 선택
-    val disposalGalleryLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.PickMultipleVisualMedia()
-    ) { uris: List<Uri> ->
-        if (uris.isNotEmpty()) {
-            val bitmaps = uris.mapNotNull { uri ->
-                try { loadBitmapFromUri(context, uri) } catch (e: Exception) { null }
-            }
-            disposalBitmaps = bitmaps
-            processDisposalBitmaps(bitmaps)
         }
     }
 
@@ -408,11 +308,7 @@ fun ReceiptApp() {
                     onImageCaptured = { bitmap ->
                         showCamera = false
                         currentBitmap = bitmap
-                        when (scanMode) {
-                            ScanMode.SAFE -> processCurrentBitmap(bitmap)
-                            ScanMode.DAMAGE -> processDamageBitmap(bitmap)
-                            ScanMode.DISPOSAL -> processCurrentBitmap(bitmap)
-                        }
+                        processCurrentBitmap(bitmap)
                         saveToAppGallery(context, bitmap)
                     },
                     onError = { exc ->
@@ -479,10 +375,6 @@ fun ReceiptApp() {
                     )
                 }
                 
-                if (showTranslatorDialog) {
-                    TranslatorView(onDismiss = { showTranslatorDialog = false })
-                }
-
                 if (showAppGallery) {
                     AppGalleryView(onDismiss = { showAppGallery = false })
                 }
@@ -490,12 +382,6 @@ fun ReceiptApp() {
                 ResultView(
                     initialText = capturedText,
                     currentBitmap = currentBitmap,
-                    scanMode = scanMode,
-                    disposalBitmaps = disposalBitmaps,
-                    onModeToggle = {
-                        scanMode = scanMode.next()
-                        resetScanState()
-                    },
                     isAlarmEnabled = isAlarmEnabled,
                     memoContent = memoContent,
                     showMemo = showMemo,
@@ -504,7 +390,6 @@ fun ReceiptApp() {
                         sharedPrefs.edit().putString("memo_content", it).apply()
                     },
                     onMemoToggle = { showMemo = !showMemo },
-                    onTranslatorClick = { showTranslatorDialog = true },
                     onGalleryClick = { showAppGallery = true },
                     onGalleryCameraClick = { showGalleryCamera = true },
                     onAlarmToggle = { enabled ->
@@ -531,14 +416,7 @@ fun ReceiptApp() {
                         tutorialStep = 0
                         sharedPrefs.edit().putBoolean("tutorial_finished", false).apply()
                     },
-                    onImageClick = {
-                        when (scanMode) {
-                            ScanMode.SAFE, ScanMode.DAMAGE -> showCamera = true
-                            ScanMode.DISPOSAL -> disposalGalleryLauncher.launch(
-                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                            )
-                        }
-                    },
+                    onImageClick = { showCamera = true },
                     onReportBounds = { key, rect ->
                         when(key) {
                             "imageBox" -> imageBoxBounds = rect
@@ -618,28 +496,7 @@ fun SettingsDialog(
     var cacheSize by remember { mutableStateOf("") }
     var gallerySize by remember { mutableStateOf("") }
 
-    // Language Pack States
-    val modelManager = remember { RemoteModelManager.getInstance() }
-    var koDownloaded by remember { mutableStateOf(false) }
-    var enDownloaded by remember { mutableStateOf(false) }
-    var jaDownloaded by remember { mutableStateOf(false) }
-    var zhDownloaded by remember { mutableStateOf(false) }
-    
-    // Loading states for each language
-    var processingModels by remember { mutableStateOf(mapOf<String, Boolean>()) }
-
-    fun checkModels() {
-        modelManager.getDownloadedModels(TranslateRemoteModel::class.java)
-            .addOnSuccessListener { models ->
-                koDownloaded = models.any { it.language == TranslateLanguage.KOREAN }
-                enDownloaded = models.any { it.language == TranslateLanguage.ENGLISH }
-                jaDownloaded = models.any { it.language == TranslateLanguage.JAPANESE }
-                zhDownloaded = models.any { it.language == TranslateLanguage.CHINESE }
-            }
-    }
-
     LaunchedEffect(Unit) {
-        checkModels()
         withContext(Dispatchers.IO) {
             val cacheBytes = listOf(File(context.cacheDir, "images"), File(context.cacheDir, "updates"))
                 .sumOf { dir -> dir.walkTopDown().filter { it.isFile }.sumOf { it.length() } }
@@ -652,39 +509,6 @@ fun SettingsDialog(
         }
     }
 
-    fun manageModel(language: String, languageName: String, isDownloaded: Boolean, isMandatory: Boolean) {
-        val model = TranslateRemoteModel.Builder(language).build()
-        
-        if (isDownloaded && !isMandatory) {
-            processingModels = processingModels.toMutableMap().apply { put(language, true) }
-            modelManager.deleteDownloadedModel(model)
-                .addOnSuccessListener {
-                    Toast.makeText(context, "$languageName 언어팩 삭제 완료", Toast.LENGTH_SHORT).show()
-                    processingModels = processingModels.toMutableMap().apply { put(language, false) }
-                    checkModels()
-                }
-                .addOnFailureListener { e ->
-                    Toast.makeText(context, "$languageName 삭제 실패: ${e.message}", Toast.LENGTH_SHORT).show()
-                    processingModels = processingModels.toMutableMap().apply { put(language, false) }
-                }
-        } else if (!isDownloaded) {
-            processingModels = processingModels.toMutableMap().apply { put(language, true) }
-            // 기본 언어팩(한국어·영어)은 WiFi 없이도 다운로드, 선택 언어팩은 WiFi 필요
-            val conditions = if (isMandatory) DownloadConditions.Builder().build()
-                             else DownloadConditions.Builder().requireWifi().build()
-
-            modelManager.download(model, conditions)
-                .addOnSuccessListener {
-                    Toast.makeText(context, "$languageName 언어팩 다운로드 완료!", Toast.LENGTH_SHORT).show()
-                    processingModels = processingModels.toMutableMap().apply { put(language, false) }
-                    checkModels()
-                }
-                .addOnFailureListener { e ->
-                    Toast.makeText(context, "$languageName 다운로드 실패: ${e.message}", Toast.LENGTH_SHORT).show()
-                    processingModels = processingModels.toMutableMap().apply { put(language, false) }
-                }
-        }
-    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -743,67 +567,6 @@ fun SettingsDialog(
 
                 Divider(modifier = Modifier.padding(vertical = 16.dp))
 
-                Text("언어팩 관리 (통역용)", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
-                Text("언어를 다운받아보세요.", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
-                Spacer(modifier = Modifier.height(8.dp))
-
-                @Composable
-                fun LanguageRow(name: String, languageCode: String, isDownloaded: Boolean, isMandatory: Boolean) {
-                    val isProcessing = processingModels[languageCode] == true
-                    
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(name)
-                            if (isMandatory) {
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("(기본)", fontSize = 10.sp, color = MaterialTheme.colorScheme.primary)
-                            }
-                        }
-                        
-                        if (isProcessing) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text("처리 중...", fontSize = 12.sp, color = Color.Gray)
-                                Spacer(modifier = Modifier.width(8.dp))
-                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                            }
-                        } else {
-                            if (isMandatory) {
-                                if (isDownloaded) {
-                                    Text("설치됨", fontSize = 12.sp, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
-                                } else {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Text("자동 설치 중", fontSize = 12.sp, color = Color.Gray)
-                                        Spacer(modifier = Modifier.width(6.dp))
-                                        CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
-                                    }
-                                }
-                            } else {
-                                Button(
-                                    onClick = { manageModel(languageCode, name, isDownloaded, false) },
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = if (isDownloaded) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
-                                    ),
-                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-                                    modifier = Modifier.height(32.dp)
-                                ) {
-                                    Text(if (isDownloaded) "삭제" else "다운로드", fontSize = 12.sp)
-                                }
-                            }
-                        }
-                    }
-                }
-
-                LanguageRow("한국어", TranslateLanguage.KOREAN, koDownloaded, true)
-                LanguageRow("영어", TranslateLanguage.ENGLISH, enDownloaded, true)
-                LanguageRow("일본어", TranslateLanguage.JAPANESE, jaDownloaded, false)
-                LanguageRow("중국어", TranslateLanguage.CHINESE, zhDownloaded, false)
-
-                Divider(modifier = Modifier.padding(vertical = 16.dp))
-
                 Text("저장소", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
                 Spacer(modifier = Modifier.height(8.dp))
 
@@ -859,7 +622,7 @@ fun SettingsDialog(
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Text("앱 버전")
-                    Text("1.2.8", color = Color.Gray)
+                    Text("1.3.0", color = Color.Gray)
                 }
 
                 Row(
@@ -944,7 +707,6 @@ fun SettingsDialog(
                 Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                     Text("이 앱은 다음 오픈소스 라이브러리를 사용합니다:\n\n" +
                             "- Google ML Kit: Vision Text Recognition\n" +
-                            "- Google ML Kit: On-device Translation\n" +
                             "- Jetpack Compose\n" +
                             "- CameraX\n" +
                             "\n" +
@@ -976,337 +738,6 @@ fun SettingsDialog(
                 }
             }
         )
-    }
-}
-
-@Composable
-fun TranslatorView(
-    onDismiss: () -> Unit
-) {
-    val context = LocalContext.current
-    val sharedPrefs = remember { context.getSharedPreferences("prefs", Context.MODE_PRIVATE) }
-    
-    var targetLanguage by remember { mutableStateOf(TranslateLanguage.ENGLISH) }
-    var chatHistory by remember { mutableStateOf(listOf<ChatMessage>()) }
-    var isListening by remember { mutableStateOf(false) }
-    var statusText by remember { mutableStateOf("대기 중") }
-    var inputText by remember { mutableStateOf("") }
-    
-    // Tutorial State
-    var isTutorialFinished by remember { mutableStateOf(sharedPrefs.getBoolean("translator_tutorial_finished", false)) }
-    var tutorialStep by remember { mutableStateOf(if (isTutorialFinished) -1 else 0) }
-    
-    // Bounds
-    var langBounds by remember { mutableStateOf<Rect?>(null) }
-    var inputBounds by remember { mutableStateOf<Rect?>(null) }
-    var topViewBounds by remember { mutableStateOf<Rect?>(null) }
-    
-    val speechRecognizer = remember { SpeechRecognizer.createSpeechRecognizer(context) }
-    var translator by remember { mutableStateOf<Translator?>(null) }
-    var isKoreanDownloaded by remember { mutableStateOf(false) }
-
-    // TTS Initialization
-    var tts: TextToSpeech? by remember { mutableStateOf(null) }
-    
-    DisposableEffect(context) {
-        val ttsInstance = TextToSpeech(context) { status ->
-            if (status != TextToSpeech.SUCCESS) {
-                Log.e("TTS", "Initialization failed")
-            }
-        }
-        tts = ttsInstance
-        onDispose {
-            ttsInstance.stop()
-            ttsInstance.shutdown()
-        }
-    }
-
-    fun speak(text: String, languageCode: String) {
-        if (tts == null) return
-        val locale = when(languageCode) {
-            TranslateLanguage.ENGLISH -> Locale.ENGLISH
-            TranslateLanguage.JAPANESE -> Locale.JAPANESE
-            TranslateLanguage.CHINESE -> Locale.CHINESE
-            TranslateLanguage.KOREAN -> Locale.KOREA
-            else -> Locale.ENGLISH
-        }
-        val result = tts?.setLanguage(locale)
-        if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
-            Toast.makeText(context, "TTS 언어 데이터가 없습니다.", Toast.LENGTH_SHORT).show()
-        } else {
-            tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, null)
-        }
-    }
-    
-    // Check models (Source + Target)
-    LaunchedEffect(targetLanguage) {
-        val options = TranslatorOptions.Builder()
-            .setSourceLanguage(TranslateLanguage.KOREAN)
-            .setTargetLanguage(targetLanguage)
-            .build()
-        val newTranslator = Translation.getClient(options)
-        
-        val modelManager = RemoteModelManager.getInstance()
-        val targetModel = TranslateRemoteModel.Builder(targetLanguage).build()
-        val koreanModel = TranslateRemoteModel.Builder(TranslateLanguage.KOREAN).build()
-        
-        // Check both models
-        modelManager.isModelDownloaded(koreanModel).addOnSuccessListener { ko ->
-            isKoreanDownloaded = ko
-            modelManager.isModelDownloaded(targetModel).addOnSuccessListener { target ->
-                if (ko && target) {
-                    translator = newTranslator
-                    statusText = "통역 준비 완료"
-                } else {
-                    translator = null
-                    val missing = mutableListOf<String>()
-                    if (!ko) missing.add("한국어")
-                    if (!target) missing.add("해당 외국어")
-                    statusText = "${missing.joinToString(", ")} 언어팩 필요 (설정에서 다운로드)"
-                }
-            }
-        }
-    }
-    
-    DisposableEffect(Unit) {
-        onDispose {
-            try {
-                speechRecognizer.destroy()
-            } catch (e: Exception) {}
-            translator?.close()
-        }
-    }
-
-    fun translateAndAdd(text: String, isUser: Boolean) {
-        if (translator == null) {
-            Toast.makeText(context, statusText, Toast.LENGTH_SHORT).show()
-            return
-        }
-        
-        if (text.isBlank()) return
-
-        if (isUser) {
-            translator!!.translate(text)
-                .addOnSuccessListener { translated ->
-                    chatHistory = chatHistory + ChatMessage(text, translated, true)
-                    statusText = "대기 중"
-                }
-                .addOnFailureListener { e ->
-                    statusText = "번역 실패: ${e.message}"
-                    Log.e("Translator", "Translation failed", e)
-                }
-        } else {
-             chatHistory = chatHistory + ChatMessage(text, "(번역 불가 - 한국어 번역기 필요)", false)
-        }
-    }
-
-    fun toggleListening() {
-        if (isListening) {
-            speechRecognizer.stopListening()
-            isListening = false
-            statusText = "음성 인식 종료"
-        } else {
-            if (translator == null) {
-                 Toast.makeText(context, statusText, Toast.LENGTH_SHORT).show()
-                 return
-            }
-            
-            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ko-KR")
-                putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-            }
-
-            speechRecognizer.setRecognitionListener(object : RecognitionListener {
-                override fun onReadyForSpeech(params: Bundle?) { statusText = "말씀하세요..." }
-                override fun onBeginningOfSpeech() {}
-                override fun onRmsChanged(rmsdB: Float) {}
-                override fun onBufferReceived(buffer: ByteArray?) {}
-                override fun onEndOfSpeech() { 
-                    isListening = false
-                    statusText = "번역 중..."
-                }
-                override fun onError(error: Int) { 
-                    isListening = false
-                    statusText = "오류 발생: $error" 
-                }
-                override fun onResults(results: Bundle?) {
-                    val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                    val text = matches?.get(0) ?: ""
-                    if (text.isNotEmpty()) {
-                        translateAndAdd(text, true)
-                    }
-                }
-                override fun onPartialResults(partialResults: Bundle?) {}
-                override fun onEvent(eventType: Int, params: Bundle?) {}
-            })
-            
-            try {
-                speechRecognizer.startListening(intent)
-                isListening = true
-            } catch (e: Exception) {
-                Toast.makeText(context, "음성 인식 시작 실패", Toast.LENGTH_SHORT).show()
-                isListening = false
-            }
-        }
-    }
-
-    Dialog(onDismissRequest = onDismiss) {
-        Surface(
-            shape = RoundedCornerShape(16.dp),
-            color = MaterialTheme.colorScheme.surface,
-            modifier = Modifier.fillMaxWidth().height(700.dp)
-        ) {
-            Column(modifier = Modifier.fillMaxSize()) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(16.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("실시간 통역", style = MaterialTheme.typography.titleLarge)
-                    TextButton(onClick = onDismiss) { Text("닫기") }
-                }
-                
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                    horizontalArrangement = Arrangement.Center
-                ) {
-                    Button(onClick = { targetLanguage = TranslateLanguage.ENGLISH }, 
-                        colors = ButtonDefaults.buttonColors(containerColor = if(targetLanguage == TranslateLanguage.ENGLISH) MaterialTheme.colorScheme.primary else Color.LightGray)) { Text("영어") }
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Button(onClick = { targetLanguage = TranslateLanguage.JAPANESE },
-                        colors = ButtonDefaults.buttonColors(containerColor = if(targetLanguage == TranslateLanguage.JAPANESE) MaterialTheme.colorScheme.primary else Color.LightGray)) { Text("일본어") }
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Button(onClick = { targetLanguage = TranslateLanguage.CHINESE },
-                        colors = ButtonDefaults.buttonColors(containerColor = if(targetLanguage == TranslateLanguage.CHINESE) MaterialTheme.colorScheme.primary else Color.LightGray)) { Text("중국어") }
-                }
-                
-                Text(statusText, modifier = Modifier.align(Alignment.CenterHorizontally).padding(8.dp), color = Color.Gray)
-                
-                Divider()
-
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                        .background(MaterialTheme.colorScheme.secondaryContainer)
-                        .padding(16.dp)
-                        .clickable {
-                             val lastMsg = chatHistory.lastOrNull()
-                             if (lastMsg != null && lastMsg.isUser) {
-                                 speak(lastMsg.translatedText, targetLanguage)
-                             }
-                        },
-                    contentAlignment = Alignment.Center
-                ) {
-                    val lastMsg = chatHistory.lastOrNull()
-                    if (lastMsg != null && lastMsg.isUser) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(
-                                text = lastMsg.translatedText,
-                                style = MaterialTheme.typography.headlineMedium,
-                                textAlign = TextAlign.Center,
-                                modifier = Modifier.rotate(180f)
-                            )
-                            Spacer(modifier = Modifier.height(8.dp))
-                             Text(
-                                text = "(터치하여 듣기)",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = Color.Gray,
-                                modifier = Modifier.rotate(180f)
-                            )
-                        }
-                    } else {
-                        Text(
-                            text = "인터넷 연결 시\n\n여기에 상대방을 위한\n통역 결과가 표시됩니다",
-                            style = MaterialTheme.typography.bodyLarge,
-                            textAlign = TextAlign.Center,
-                            color = Color.Gray,
-                            modifier = Modifier.rotate(180f)
-                        )
-                    }
-                }
-
-                Divider()
-
-                LazyColumn(
-                    modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 16.dp),
-                    reverseLayout = true
-                ) {
-                    items(chatHistory.reversed()) { msg ->
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 4.dp),
-                            horizontalAlignment = if (msg.isUser) Alignment.End else Alignment.Start
-                        ) {
-                            Card(
-                                colors = CardDefaults.cardColors(
-                                    containerColor = if (msg.isUser) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.secondaryContainer
-                                ),
-                                modifier = Modifier.clickable {
-                                    val textToRead = msg.translatedText
-                                    val langToRead = if (msg.isUser) targetLanguage else TranslateLanguage.KOREAN
-                                    if (!textToRead.startsWith("(")) {
-                                        speak(textToRead, langToRead)
-                                    }
-                                }
-                            ) {
-                                Column(modifier = Modifier.padding(8.dp)) {
-                                    Text(text = msg.text, style = MaterialTheme.typography.bodyMedium)
-                                    Divider(color = Color.White.copy(alpha = 0.5f), modifier = Modifier.padding(vertical = 4.dp))
-                                    Text(text = msg.translatedText, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Bold)
-                                }
-                            }
-                        }
-                    }
-                }
-                
-                Divider()
-
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    IconButton(
-                        onClick = { toggleListening() },
-                        modifier = Modifier
-                            .size(48.dp)
-                            .background(
-                                if (isListening) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
-                                androidx.compose.foundation.shape.CircleShape
-                            )
-                    ) {
-                        Icon(
-                            imageVector = if (isListening) Icons.Filled.Stop else Icons.Filled.Mic,
-                            contentDescription = "Mic",
-                            tint = Color.White
-                        )
-                    }
-                    
-                    Spacer(modifier = Modifier.width(8.dp))
-                    
-                    OutlinedTextField(
-                        value = inputText,
-                        onValueChange = { inputText = it },
-                        modifier = Modifier.weight(1f),
-                        placeholder = { Text("텍스트 입력...") },
-                        maxLines = 1
-                    )
-                    
-                    IconButton(onClick = {
-                        if (inputText.isNotBlank()) {
-                            translateAndAdd(inputText, true)
-                            inputText = ""
-                        }
-                    }) {
-                        Icon(Icons.Filled.Send, contentDescription = "Send", tint = MaterialTheme.colorScheme.primary)
-                    }
-                }
-            }
-        }
     }
 }
 
@@ -1365,15 +796,11 @@ fun AlarmConfigDialog(
 fun ResultView(
     initialText: String,
     currentBitmap: Bitmap?,
-    scanMode: ScanMode,
-    disposalBitmaps: List<Bitmap>,
-    onModeToggle: () -> Unit,
     isAlarmEnabled: Boolean,
     memoContent: String,
     showMemo: Boolean,
     onMemoChange: (String) -> Unit,
     onMemoToggle: () -> Unit,
-    onTranslatorClick: () -> Unit,
     onGalleryClick: () -> Unit,
     onGalleryCameraClick: () -> Unit,
     onAlarmToggle: (Boolean) -> Unit,
@@ -1395,10 +822,9 @@ fun ResultView(
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text(
-            text = scanMode.label,
+            text = "금고보관",
             style = MaterialTheme.typography.headlineMedium,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.clickable { onModeToggle() }
+            fontWeight = FontWeight.Bold
         )
 
         Spacer(modifier = Modifier.height(16.dp))
@@ -1414,11 +840,6 @@ fun ResultView(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.End
         ) {
-            // Translator Icon
-            IconButton(onClick = onTranslatorClick) {
-                Icon(Icons.Filled.Translate, contentDescription = "통역")
-            }
-
             // App Gallery Icon
             IconButton(onClick = onGalleryClick) {
                 Icon(Icons.Filled.PhotoLibrary, contentDescription = "앱 갤러리")
@@ -1506,23 +927,7 @@ fun ResultView(
                 .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(12.dp)),
             contentAlignment = Alignment.Center
         ) {
-            if (scanMode == ScanMode.DISPOSAL && disposalBitmaps.isNotEmpty()) {
-                LazyRow(
-                    modifier = Modifier.fillMaxSize().padding(8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    items(disposalBitmaps) { bmp ->
-                        Image(
-                            bitmap = bmp.asImageBitmap(),
-                            contentDescription = "폐기 사진",
-                            modifier = Modifier
-                                .fillMaxHeight()
-                                .clip(RoundedCornerShape(8.dp)),
-                            contentScale = ContentScale.Fit
-                        )
-                    }
-                }
-            } else if (currentBitmap != null) {
+            if (currentBitmap != null) {
                 Image(
                     bitmap = currentBitmap.asImageBitmap(),
                     contentDescription = "Receipt Image",
@@ -1538,10 +943,7 @@ fun ResultView(
                         modifier = Modifier.size(48.dp)
                     )
                     Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        if (scanMode == ScanMode.DISPOSAL) "터치하여 폐기 사진 선택 (여러 장 가능)" else "터치하여 사진 등록",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Text("터치하여 사진 등록", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         }
@@ -1570,12 +972,10 @@ fun ResultView(
                 clipboard.setPrimaryClip(clip)
                 Toast.makeText(context, "결과가 복사되었습니다.", Toast.LENGTH_SHORT).show()
 
-                if (scanMode != ScanMode.DISPOSAL) {
-                    if (currentBitmap != null) {
-                        shareImageOnly(context, currentBitmap)
-                    } else {
-                        Toast.makeText(context, "공유할 이미지가 없습니다.", Toast.LENGTH_SHORT).show()
-                    }
+                if (currentBitmap != null) {
+                    shareImageOnly(context, currentBitmap)
+                } else {
+                    Toast.makeText(context, "공유할 이미지가 없습니다.", Toast.LENGTH_SHORT).show()
                 }
             },
             modifier = Modifier
@@ -1849,47 +1249,6 @@ fun saveBitmapToGallery(context: Context, bitmap: Bitmap) {
     }
 }
 
-// 비트맵에서 텍스트 인식 결과(Text)를 suspend 함수로 반환
-suspend fun recognizeTextFromBitmap(bitmap: Bitmap): com.google.mlkit.vision.text.Text =
-    suspendCancellableCoroutine { cont ->
-        val image = InputImage.fromBitmap(bitmap, 0)
-        val recognizer = TextRecognition.getClient(KoreanTextRecognizerOptions.Builder().build())
-        recognizer.process(image)
-            .addOnSuccessListener { cont.resume(it) }
-            .addOnFailureListener { e -> cont.resumeWithException(e) }
-    }
-
-// CU 폐기 라벨은 "Again" 문구가 고정으로 찍히므로, 이를 기준으로 바로 다음 줄(상품명×수량)만 읽어
-// 배경에 같이 찍힌 제품 포장지의 유통기한·영양정보 등은 무시한다.
-fun parseDisposalLabel(visionText: com.google.mlkit.vision.text.Text): List<DisposalItem> {
-    val lines = visionText.textBlocks.flatMap { it.lines }.map { it.text.trim() }
-    val quantityRegex = Regex("[×xX]\\s*(\\d+)\\s*$")
-    val items = mutableListOf<DisposalItem>()
-    for (i in lines.indices) {
-        if (lines[i].contains("again", ignoreCase = true)) {
-            val nextLine = lines.getOrNull(i + 1) ?: continue
-            val match = quantityRegex.find(nextLine) ?: continue
-            val quantity = match.groupValues[1].toIntOrNull() ?: continue
-            val name = nextLine.substring(0, match.range.first).trim()
-            if (name.isNotEmpty()) items.add(DisposalItem(name, quantity))
-        }
-    }
-    return items
-}
-
-// 폐기: 오늘 날짜 + 상품명·수량 목록
-fun formatDisposalList(items: List<DisposalItem>): String {
-    val calendar = Calendar.getInstance()
-    val month = calendar.get(Calendar.MONTH) + 1
-    val day = calendar.get(Calendar.DAY_OF_MONTH)
-    val sb = StringBuilder("${month}월${day}일(금일) 폐기 목록입니다")
-    items.forEach { sb.append("\n${it.name} ${it.quantity}개") }
-    return sb.toString()
-}
-
-// 파손: 단건 보고 문구
-fun formatDamageReport(item: DisposalItem): String = "${item.name} ${item.quantity}개 파손입니다"
-
 // ML Kit로 비트맵에서 텍스트 인식 후 파싱 함수에 전달
 fun processImage(bitmap: Bitmap, isPos1Checked: Boolean, isPos2Checked: Boolean, useTenThousandUnit: Boolean, onResult: (String) -> Unit) {
     val image = InputImage.fromBitmap(bitmap, 0)
@@ -2058,67 +1417,7 @@ fun TutorialOverlay(
         2 -> "사진이 등록되면\n\n자연스럽게 양식에 맞춘 결과가\n\n이곳에 나타납니다"
         3 -> "이후 이 버튼을 눌러\n채팅방에 사진을 공유할 수 있습니다\n\n보고 양식은 클립보드에 복사되니,\n바로 붙여넣으면 됩니다."
         4 -> "앨범 아이콘을 누르면 앱 갤러리가 열립니다.\n\n카메라 아이콘은 결과 화면에 영향 없이\n사진을 갤러리에만 저장합니다.\n\n사진을 꾹 누르면 여러 장을 선택해\n저장·삭제·공유할 수 있습니다."
-        5 -> "다양한 기능들이 준비되어 있습니다.\n\n메모장에 인수인계 내용을 적어두거나\n간단한 번역 기능도 활용해보세요."
-        else -> ""
-    }
-
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .clickable { onNext() }
-    ) {
-        androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
-            with(drawContext.canvas.nativeCanvas) {
-                val checkPoint = saveLayer(null, null)
-                drawRect(color = Color.Black.copy(alpha = 0.7f), size = size)
-                if (targetRect != null) {
-                    drawRect(
-                        topLeft = Offset(targetRect.left, targetRect.top),
-                        size = targetRect.size,
-                        color = Color.Transparent,
-                        blendMode = BlendMode.Clear
-                    )
-                }
-                restoreToCount(checkPoint)
-            }
-        }
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(32.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                text = guideText,
-                color = Color.White,
-                style = MaterialTheme.typography.titleLarge,
-                textAlign = TextAlign.Center,
-                fontWeight = FontWeight.Bold
-            )
-        }
-    }
-}
-
-@Composable
-fun TranslatorTutorialOverlay(
-    step: Int,
-    langBounds: Rect?,
-    inputBounds: Rect?,
-    topViewBounds: Rect?,
-    onNext: () -> Unit
-) {
-    val targetRect = when (step) {
-        0 -> langBounds
-        1 -> inputBounds
-        2 -> topViewBounds
-        else -> null
-    }
-
-    val guideText = when (step) {
-        0 -> "원하는 언어를 선택할 수 있습니다.\n\n설정에서 언어팩을 다운로드해야 사용 가능합니다."
-        1 -> "이곳에서 음성(마이크) 또는 텍스트로\n번역할 내용을 입력할 수 있습니다."
-        2 -> "상대방에게 보여지는 화면입니다.\n글씨가 거꾸로 뒤집혀 표시되어\n맞은편 상대방이 읽기 편합니다."
-        3 -> "오프라인 번역이라 정확도가 다소 낮을 수 있습니다.\n\n인터넷이 연결된 상태에서 번역된 글을 누르면\n음성(TTS)으로 읽어줍니다."
+        5 -> "다양한 기능들이 준비되어 있습니다.\n\n메모장에 인수인계 내용을 적어두고 활용해보세요."
         else -> ""
     }
 
@@ -2320,21 +1619,6 @@ fun formatSize(bytes: Long): String = when {
     bytes < 1024 -> "${bytes}B"
     bytes < 1024 * 1024 -> "${bytes / 1024}KB"
     else -> "${"%.1f".format(bytes / (1024.0 * 1024.0))}MB"
-}
-
-// 앱 시작 시 한국어·영어 언어팩을 WiFi 무관하게 자동 설치
-fun autoDownloadMandatoryModels(context: Context) {
-    val modelManager = RemoteModelManager.getInstance()
-    listOf(TranslateLanguage.KOREAN, TranslateLanguage.ENGLISH).forEach { language ->
-        val model = TranslateRemoteModel.Builder(language).build()
-        modelManager.isModelDownloaded(model).addOnSuccessListener { downloaded ->
-            if (!downloaded) {
-                modelManager.download(model, DownloadConditions.Builder().build())
-                    .addOnSuccessListener { Log.d("MLKit", "$language 자동 설치 완료") }
-                    .addOnFailureListener { e -> Log.e("MLKit", "$language 자동 설치 실패", e) }
-            }
-        }
-    }
 }
 
 fun loadAppGalleryImages(context: Context): List<File> {
