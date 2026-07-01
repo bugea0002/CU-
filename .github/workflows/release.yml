@@ -55,10 +55,18 @@ jobs:
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
 
+      - name: Compute APK sha256
+        id: hash
+        run: |
+          VERSION=${{ steps.version.outputs.VERSION }}
+          SHA256=$(sha256sum "app/build/outputs/apk/release/${VERSION}.apk" | cut -d' ' -f1)
+          echo "SHA256=$SHA256" >> "$GITHUB_OUTPUT"
+
       - name: Update and commit version.json
         run: |
           VERSION=${{ steps.version.outputs.VERSION }}
           VCODE=${{ steps.version.outputs.VCODE }}
+          SHA256=${{ steps.hash.outputs.SHA256 }}
           TAG="${{ github.ref_name }}"
           REPO="${{ github.repository }}"
           APK_URL="https://github.com/${REPO}/releases/download/${TAG}/${VERSION}.apk"
@@ -75,6 +83,7 @@ jobs:
           d['versionCode'] = int('${VCODE}')
           d['versionName'] = '${VERSION}'
           d['apkUrl'] = '${APK_URL}'
+          d['sha256'] = '${SHA256}'
           with open('version.json', 'w') as f:
               json.dump(d, f, ensure_ascii=False, indent=2)
           "

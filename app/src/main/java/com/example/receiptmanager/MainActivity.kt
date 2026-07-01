@@ -96,6 +96,7 @@ import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import java.io.File
 import java.io.FileOutputStream
+import java.security.MessageDigest
 import java.util.Calendar
 import java.util.concurrent.Executors
 import kotlin.math.roundToInt
@@ -127,7 +128,8 @@ data class ChatMessage(
 data class UpdateInfo(
     val versionName: String,
     val apkUrl: String,
-    val releaseNotes: String
+    val releaseNotes: String,
+    val sha256: String
 )
 
 class MainActivity : ComponentActivity() {
@@ -212,7 +214,7 @@ fun ReceiptApp() {
         try { updateInfo = checkForUpdate(context) } catch (e: Exception) { }
         withContext(Dispatchers.IO) {
             val yesterday = System.currentTimeMillis() - 24 * 60 * 60 * 1000L
-            listOf(File(context.cacheDir, "images"), File(context.cacheDir, "updates")).forEach { dir ->
+            listOf(File(context.cacheDir, "images")).forEach { dir ->
                 dir.listFiles()?.forEach { if (it.lastModified() < yesterday) it.delete() }
             }
         }
@@ -487,7 +489,7 @@ fun ReceiptApp() {
                         coroutineScope.launch {
                             isDownloadingUpdate = true
                             try {
-                                downloadAndInstallApk(context, info.apkUrl)
+                                downloadAndInstallApk(context, info.apkUrl, info.sha256)
                             } catch (e: Exception) {
                                 Toast.makeText(context, "다운로드 실패: ${e.message}", Toast.LENGTH_SHORT).show()
                             } finally {
@@ -768,7 +770,7 @@ fun SettingsDialog(
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Text("앱 버전")
-                    Text("1.2.5", color = Color.Gray)
+                    Text("1.2.6", color = Color.Gray)
                 }
 
                 Row(
@@ -875,7 +877,7 @@ fun SettingsDialog(
                 coroutineScope.launch {
                     isDownloadingFromSettings = true
                     try {
-                        downloadAndInstallApk(context, info.apkUrl)
+                        downloadAndInstallApk(context, info.apkUrl, info.sha256)
                     } catch (e: Exception) {
                         Toast.makeText(context, "다운로드 실패: ${e.message}", Toast.LENGTH_SHORT).show()
                     } finally {
@@ -2019,7 +2021,8 @@ suspend fun checkForUpdate(context: Context): UpdateInfo? = withContext(Dispatch
             UpdateInfo(
                 versionName = json.getString("versionName"),
                 apkUrl = json.getString("apkUrl"),
-                releaseNotes = json.optString("releaseNotes", "")
+                releaseNotes = json.optString("releaseNotes", ""),
+                sha256 = json.getString("sha256")
             )
         } else null
     } catch (e: Exception) {
@@ -2027,8 +2030,8 @@ suspend fun checkForUpdate(context: Context): UpdateInfo? = withContext(Dispatch
     }
 }
 
-// APK 다운로드 후 설치 인텐트 실행, 완료 즉시 캐시 파일 삭제
-suspend fun downloadAndInstallApk(context: Context, apkUrl: String) {
+// APK 다운로드 후 SHA-256 무결성 검증, 통과 시 설치 인텐트 실행
+suspend fun downloadAndInstallApk(context: Context, apkUrl: String, expectedSha256: String) {
     withContext(Dispatchers.IO) {
         val connection = URL(apkUrl).openConnection() as HttpURLConnection
         connection.instanceFollowRedirects = true
@@ -2040,6 +2043,21 @@ suspend fun downloadAndInstallApk(context: Context, apkUrl: String) {
             FileOutputStream(apkFile).use { output -> input.copyTo(output) }
         }
         connection.disconnect()
+
+        val digest = MessageDigest.getInstance("SHA-256")
+        apkFile.inputStream().use { input ->
+            val buffer = ByteArray(8192)
+            var read: Int
+            while (input.read(buffer).also { read = it } != -1) {
+                digest.update(buffer, 0, read)
+            }
+        }
+        val actualSha256 = digest.digest().joinToString("") { "%02x".format(it) }
+        if (!actualSha256.equals(expectedSha256, ignoreCase = true)) {
+            apkFile.delete()
+            throw IllegalStateException("업데이트 파일 무결성 검증 실패")
+        }
+
         withContext(Dispatchers.Main) {
             val uri = FileProvider.getUriForFile(
                 context,
