@@ -2,6 +2,6 @@
   "versionCode": 9,
   "versionName": "1.2.6",
   "apkUrl": "https://github.com/bugea0002/CU-/releases/download/v1.2.6/1.2.6.apk",
-  "sha256": "",
+  "sha256": "d368ec9c6a9e5b583916454bef3b6b56961f095f50c1735f04452c19f012e77a",
   "releaseNotes": "업데이트 파일 무결성(SHA-256) 검증 추가, 캐시 자동 정리가 업데이트 파일을 건드리지 않도록 수정"
 }
