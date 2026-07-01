@@ -95,6 +95,7 @@ import com.google.mlkit.nl.translate.Translator
 import com.google.mlkit.nl.translate.TranslatorOptions
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
+import com.google.mlkit.vision.text.korean.KoreanTextRecognizerOptions
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import java.io.File
 import java.io.FileOutputStream
@@ -357,7 +358,11 @@ fun ReceiptApp() {
             try {
                 val bitmap = loadBitmapFromUri(context, uri)
                 currentBitmap = bitmap
-                processCurrentBitmap(bitmap)
+                when (scanMode) {
+                    ScanMode.SAFE -> processCurrentBitmap(bitmap)
+                    ScanMode.DAMAGE -> processDamageBitmap(bitmap)
+                    ScanMode.DISPOSAL -> processCurrentBitmap(bitmap)
+                }
                 showCamera = false
             } catch (e: Exception) {
                 Toast.makeText(context, "이미지 로드 실패: ${e.message}", Toast.LENGTH_SHORT).show()
@@ -854,7 +859,7 @@ fun SettingsDialog(
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Text("앱 버전")
-                    Text("1.2.7", color = Color.Gray)
+                    Text("1.2.8", color = Color.Gray)
                 }
 
                 Row(
@@ -1848,7 +1853,7 @@ fun saveBitmapToGallery(context: Context, bitmap: Bitmap) {
 suspend fun recognizeTextFromBitmap(bitmap: Bitmap): com.google.mlkit.vision.text.Text =
     suspendCancellableCoroutine { cont ->
         val image = InputImage.fromBitmap(bitmap, 0)
-        val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+        val recognizer = TextRecognition.getClient(KoreanTextRecognizerOptions.Builder().build())
         recognizer.process(image)
             .addOnSuccessListener { cont.resume(it) }
             .addOnFailureListener { e -> cont.resumeWithException(e) }
