@@ -2,6 +2,6 @@
   "versionCode": 10,
   "versionName": "1.2.7",
   "apkUrl": "https://github.com/bugea0002/CU-/releases/download/v1.2.7/1.2.7.apk",
-  "sha256": "",
+  "sha256": "dd485385a0574d0358b63b8c4f6e2e71fcb73be35984708072b4eed9b152502b",
   "releaseNotes": "금고보관/폐기/파손 모드 추가 (화면 상단 제목 탭으로 전환). 폐기는 갤러리에서 여러 장 선택해 목록 자동 생성, 파손은 촬영 1건으로 보고 문구 생성"
 }
